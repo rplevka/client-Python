@@ -128,8 +128,47 @@ class ReportPortalService(object):
         self.session = requests.Session()
         self.session.headers["Authorization"] = "bearer {0}".format(self.token)
         self.stack = [None]
+        self.hstack = {}
         self.launch_id = None
         self.verify_ssl = verify_ssl
+
+    def _stack_merge(d1, d2, dryrun=True, exists=None):
+        """
+        This method compares a given dictionary structure with the stack
+        It updates the `stack` variable if dryrun=False
+        Returns True if the given structure already exists in the stack
+        """
+        exists = exists
+        for k in d2.keys():
+            if d1.get(k) is None:
+                # the structure does not exist yet:
+                if dryrun is False:
+                    exists = False
+                    d1[k] = d2[k]
+                else:
+                    return False
+            else:
+                # current structure level exists:
+                if exists is None:
+                    exists = True
+                if isinstance(d2[k], dict):
+                    exists = stack_merge(d1[k], d2[k], create_missing=create_missing, exists=exists)
+        return exists
+
+    def _component_dict(components):
+        """
+        Converts the given components path (list) to a dict structure and compares it
+        with the existing stack.
+        """
+        tree = {}
+        for comp in reversed(components):
+            if comp == '()':
+                continue
+            if comp == components[-1]:
+                tree = {"tests": [{"name": "comp", "item_id": ""}]}
+            else:
+                tree = {comp: {"children": tree, "item_id": ""}}
+        return tree
 
     def terminate(self):
         pass
@@ -170,7 +209,7 @@ class ReportPortalService(object):
                                      status=status)
 
     def start_test_item(self, name, start_time, item_type, description=None,
-                        tags=None, parameters=None):
+                        tags=None, parent_item=None, base_item=False, parameters=None):
         """
         item_type can be (SUITE, STORY, TEST, SCENARIO, STEP, BEFORE_CLASS,
         BEFORE_GROUPS, BEFORE_METHOD, BEFORE_SUITE, BEFORE_TEST, AFTER_CLASS,
@@ -196,16 +235,24 @@ class ReportPortalService(object):
             "type": item_type,
             "parameters": parameters,
         }
-        parent_item_id = self.stack[-1]
-        if parent_item_id is not None:
-            url = uri_join(self.base_url, "item", parent_item_id)
-        else:
-            url = uri_join(self.base_url, "item")
-        r = self.session.post(url=url, json=data, verify=self.verify_ssl)
+        if parent_item is None:
+            parent_item_id = self.stack[-1]
+            if parent_item_id is not None:
+                url = uri_join(self.base_url, "item", parent_item_id)
+            else:
+                url = uri_join(self.base_url, "item")
+            r = self.session.post(url=url, json=data, verify=self.verify_ssl)
 
-        item_id = _get_id(r)
-        self.stack.append(item_id)
-        logger.debug("start_test_item - Stack: %s", self.stack)
+            item_id = _get_id(r)
+            self.stack.append(item_id)
+            logger.debug("start_test_item - Stack: %s", self.stack)
+        else:
+            if base_item:
+                url = uri_join(self.base_url, "item")
+            else:
+                url = uri_join(self.base_url, "item", parent_item)
+            r = self.session.post(url=url, json=data)
+            item_id = _get_id(r)
         return item_id
 
     def finish_test_item(self, end_time, status, issue=None):
